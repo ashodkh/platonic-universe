@@ -4,49 +4,74 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Platonic Universe tests the **Platonic Representation Hypothesis** on astronomical data — whether foundation models trained on different objectives/modalities converge toward shared representations. It compares embeddings from various vision models (ViT, DINOv2, ConvNeXt, IJEPA, AstroPT, SAM2, etc.) across astronomical datasets (HSC, JWST, Legacy Survey, DESI) using representational similarity metrics (primarily Mutual k-Nearest Neighbour).
+**Platonic Universe** tests the Platonic Representation Hypothesis (PRH) on astronomical data: the idea that neural networks trained on different modalities and objectives converge toward a shared statistical model of reality. The project embeds galaxy images/spectra with various vision models (ViT, DINOv2, ConvNeXtv2, AstroPT, Specformer, etc.) and measures cross-modal representational similarity.
 
 ## Commands
 
 ```bash
-# Install
-uv sync && uv pip install .
+# Install (uv recommended)
+pip install uv && uv sync
+uv pip install .          # base
+uv pip install ".[sam2]"  # with SAM2 support
 
-# Run tests
-uv run pytest                    # all tests
-uv run pytest tests/test_metrics_kernel.py  # single file
-uv run pytest -k "test_cka"     # single test by name
+# Run experiments (CLI)
+platonic_universe run --model vit --mode jwst --batch-size 128 --knn-k 10
+platonic_universe compare <parquet_file> --metrics cka mknn
+platonic_universe run-physics --model vit --split test
+
+# Tests
+pytest tests/
+pytest tests/test_alignment.py -v   # batch invariance + determinism
 
 # Lint
-uv run ruff check src/          # ruff config in pyproject.toml: E, F, I rules; E501 ignored
-
-# CLI (after install)
-pu run --model vit --mode jwst
-pu compare data/embeddings.parquet --metrics cka mknn
-pu calibrate data/embeddings.parquet --metrics cka
-pu benchmark --model vit --mode jwst
+ruff check src/
 ```
 
 ## Architecture
 
-**Source layout**: `src/pu/` with package installed via `pyproject.toml` + `setup.py` (setup.py builds a C++/pybind11 extension `pu_cka` for fast CKA computation).
+### Data flow
 
-**Registry pattern**: Both models and datasets use self-registering adapter registries. Adapters register themselves on import via side-effect imports in `__init__.py`. To add a new model or dataset, create an adapter module and import it in the respective `__init__.py`.
+```
+HuggingFace Hub (Smith42/* datasets)
+    → DatasetAdapter.prepare()        # loads + preprocesses to HF Dataset
+    → ModelAdapter.embed_for_mode()   # batch embeddings via GPU
+    → Parquet file (embeddings)
+    → metrics/io.py compare_from_parquet()
+    → MKNN / CKA / etc. → results dict + figs/
+```
 
-- **Models** (`src/pu/models/`): Adapters wrap HuggingFace models (`hf.py` covers ViT/DINO/ConvNeXt/IJEPA/VJEPA/Hiera/MAE), AstroPT (`astropt.py`), and SAM2 (`sam2.py`). All inherit from `BaseAdapter` in `base.py`. Registry in `registry.py`.
-- **Datasets** (`src/pu/pu_datasets/`): Adapters for HF crossmatched datasets (`hf_crossmatched.py` covers JWST/Legacy Survey), SDSS (`sdss.py`), and DESI (`desi.py`). All inherit from `BaseDatasetAdapter` in `base.py`. Registry in `registry.py`.
-- **Metrics** (`src/pu/metrics/`): Organized by family — kernel (`cka`, `mmd`), geometric (`procrustes`, `frechet`), CCA (`svcca`, `pwcca`), spectral, information-theoretic, neighbor-based (`mknn`, `jaccard`), regression. The `io.py` module provides `compare()` for batch metric computation and parquet I/O. `METRICS_REGISTRY` maps metric names to functions.
-- **Experiments** (`experiments.py`): Orchestrates the pipeline — loads model+dataset adapters, generates embeddings, computes metrics, saves results to `data/`.
-- **CLI** (`__main__.py`): Four subcommands: `run`, `compare`, `calibrate`, `benchmark`.
+### Key abstractions
 
-**Key flow**: HSC is always the reference baseline. Experiments compare HSC embeddings against a second modality (JWST, Legacy Survey, SDSS, DESI) for each model size.
+**`src/pu/models/base.py` — `ModelAdapter`**  
+Abstract base for all models. Subclasses must implement `load()`, `get_preprocessor()`, and `embed_for_mode()`. Supports layer-wise extraction via forward hooks (`_capture_module_outputs`) at four granularities (BLOCKS, RESIDUAL, LEAVES, ALL). All model adapters self-register via `register_adapter(alias, cls)` and are discovered through `src/pu/models/registry.py`.
 
-**C++ extension**: `src/pu/cpp/` contains CKA computation via pybind11 (`pu_cka` module), compiled with OpenMP. Used through `compute_cka_mmap()`.
+**`src/pu/pu_datasets/base.py` — `DatasetAdapter`**  
+Abstract base for datasets. `prepare(processor, modes, filterfun)` returns a preprocessed HuggingFace `Dataset`. Datasets self-register via the same registry pattern.
 
-## Important Details
+**`src/pu/metrics/`**  
+Standalone metrics library. Primary metric used in the paper is MKNN (`neighbors.py`, default k=10). CKA (`kernel.py`) is used for validation. `io.py` handles Parquet I/O and batched metric computation via `compare_from_parquet`. All metrics return floats; most are in [0, 1].
 
-- Python >=3.11 required
-- `transformers` is installed from git HEAD (see `[tool.uv.sources]`)
-- Optional `sam2` dependency: `pip install ".[sam2]"`
-- Paired modes (SDSS, DESI) force `num_workers=0` to preserve draw order
-- Lazy imports throughout to avoid loading torch/transformers when only using metrics
+**`src/pu/experiments.py`**  
+Main orchestration: loads model + two dataset adapters (HSC as reference + comparison mode), generates embeddings, computes metrics, optionally runs physics validation and saves visualizations.
+
+**`src/pu/preprocess.py` + `zoom.py`**  
+Image preprocessing: converts astronomical flux arrays → PIL RGB via `flux_to_pil`. `resize_galaxy_to_fit` supports two strategies: `match` (fixed extents aligned to reference survey) and `fill` (Otsu-based cropping so galaxy fills frame). Normalization percentiles live in `data/percentiles.json`.
+
+### Model families
+
+- **HuggingFace** (`models/hf.py`): ViT, DINOv2, DINOv3, ConvNeXtv2, CLIP, LLaVA, PaliGemma, IJEPA
+- **Astronomy-specific** (`models/astropt.py`, `models/specformer.py`, `models/aion.py`): AstroPT, Specformer, AION/Polymathic
+
+### Datasets
+
+All data is loaded from HuggingFace Hub. Crossmatched datasets pair HSC (reference optical imaging) with a comparison modality (JWST infrared, Legacy Survey, DESI/SDSS spectra). Column convention: `{mode}_image` for image data.
+
+### Physics validation (`physics_experiment.py`, `metrics/physics.py`)
+
+Tests whether embeddings encode known galaxy properties (stellar mass, redshift, Sérsic index, SFR, morphology fractions) via linear/nonlinear probing with cross-validation.
+
+## Important test properties
+
+- **Batch-size invariance**: embeddings for a given sample must be identical regardless of batch size (tested in `test_alignment.py`).
+- **Determinism**: two runs with the same seed must produce bit-identical embeddings.
+- **Fingerprint ordering**: HF Dataset fingerprints verify the data pipeline hasn't shuffled samples.

@@ -7,5 +7,6 @@ from . import sdss  # noqa: F401
 from . import desi  # noqa: F401
 from . import galaxies  # noqa: F401
 from . import desi_spectra  # noqa: F401
+from . import cosmosweb  # noqa: F401
 
 __all__ = ["register_dataset", "get_dataset_adapter", "list_datasets"]

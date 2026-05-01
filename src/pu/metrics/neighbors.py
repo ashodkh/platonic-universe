@@ -168,3 +168,26 @@ def rsa(
         raise ValueError(f"Unknown method: {method}. Use 'spearman' or 'pearson'")
 
     return float(corr)
+
+def mknn_neighbor_input(
+    nn1: NDArray[np.floating],
+    nn2: NDArray[np.floating],
+) -> float:
+    """
+    Mutual k-Nearest Neighbors overlap.
+
+    Measures the overlap between k-nearest neighbor sets in two
+    embedding spaces. 
+
+    Args:
+        nn1: (n_samples, k) neighbor matrix
+        nn2: (n_samples, k) neighbor matrix
+
+    Returns:
+        float in [0, 1] where 1 = identical neighbor sets
+
+    """
+
+    overlap = [len(set(a).intersection(b)) for a, b in zip(nn1, nn2)]
+
+    return float(np.mean(overlap) / nn1.shape[1])
