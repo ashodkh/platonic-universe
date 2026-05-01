@@ -29,7 +29,7 @@ from tqdm import tqdm
 from pu.pu_datasets.cosmosweb import CATALOG_COLUMNS
 
 # ── Config ──────────────────────────────────────────────────────────────────────
-DATASET         = "Ashodkh/cosmosweb-hsc-jwst-high-snr-pil2"
+DATASET         = ""
 OUT_DIR         = ""
 EMB_DIR         = f"{OUT_DIR}/embeddings"
 DS_TAG          = DATASET.split("/")[-1]

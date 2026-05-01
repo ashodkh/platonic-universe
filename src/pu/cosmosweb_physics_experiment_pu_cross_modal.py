@@ -118,7 +118,7 @@ model_params_M = {
     "llava_15":  {"7b": 7000,    "13b": 13000},
 }
 
-DATASET         = "Ashodkh/cosmosweb-hsc-jwst-high-snr-pil2"
+DATASET         = ""
 telescopes      = ["hsc", "jwst"]
 N_USE           = 45000
 BATCH_SIZE      = 128
